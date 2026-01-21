@@ -118,3 +118,6 @@ This project has been evaluated and certified to comply with the Microsoft Respo
 ## ⚡ License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+## Windows Support
+Some features rely on Gunicorn, which is not supported on Windows.
+For full functionality, use WSL or a Linux-based environment.
