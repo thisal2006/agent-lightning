@@ -15,16 +15,57 @@ import time
 import traceback
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
-from typing import Any, AsyncContextManager, AsyncIterator, Dict, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, AsyncContextManager, AsyncIterator, Dict, Literal, Optional, cast
 
-import aiohttp
-import requests
-import uvicorn
-from fastapi import FastAPI
-from gunicorn.app.base import BaseApplication
-from gunicorn.arbiter import Arbiter
-from portpicker import pick_unused_port
+import platform
+
+if TYPE_CHECKING:
+    import aiohttp
+    import requests
+    import uvicorn
+    from fastapi import FastAPI
+
+
+IS_WINDOWS = platform.system() == "Windows"
+
+if not IS_WINDOWS:
+    try:
+        from gunicorn.app.base import BaseApplication as _BaseApplication
+        from gunicorn.arbiter import Arbiter as _Arbiter
+    except ImportError:
+        _BaseApplication = object  # type: ignore
+        _Arbiter = None  # type: ignore
+else:
+    _BaseApplication = object  # type: ignore
+    _Arbiter = None  # type: ignore
+
+try:
+    import aiohttp as _aiohttp
+except ImportError:
+    _aiohttp = None  # type: ignore
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None  # type: ignore
+
+try:
+    import uvicorn as _uvicorn
+except ImportError:
+    _uvicorn = None  # type: ignore
+
+try:
+    from fastapi import FastAPI as _FastAPI
+except ImportError:
+    _FastAPI = None  # type: ignore
+
+try:
+    from portpicker import pick_unused_port  # type: ignore
+except ImportError:
+    def pick_unused_port():
+        raise RuntimeError("portpicker is required but not installed")
 
 __all__ = ["PythonServerLauncher", "PythonServerLauncherArgs", "LaunchMode"]
 
@@ -87,7 +128,7 @@ class ChildEvent:
 logger = logging.getLogger(__name__)
 
 
-class GunicornApp(BaseApplication):
+class GunicornApp(_BaseApplication):  # type: ignore
     """
     Programmatic Gunicorn application that:
 
@@ -95,23 +136,23 @@ class GunicornApp(BaseApplication):
     - Uses `uvicorn_worker.UvicornWorker`.
     """
 
-    def __init__(self, app: FastAPI, options: Dict[str, Any]):
+    def __init__(self, app: _FastAPI, options: Dict[str, Any]) -> None: # pyright: ignore[reportInvalidTypeForm]
         self.application = app
         self.options = options
         super().__init__()  # type: ignore
 
-    def load_config(self):
-        cfg = self.cfg
+    def load_config(self) -> None:
+        cfg = self.cfg # pyright: ignore[reportUnknownMemberType]
         valid_keys = cfg.settings.keys()  # type: ignore
         for k, v in (self.options or {}).items():
             if k in valid_keys and v is not None:
                 cfg.set(k, v)  # type: ignore
 
-    def load(self):
+    def load(self) -> _FastAPI:
         return self.application
 
 
-async def shutdown_uvicorn_server(server: uvicorn.Server, task: asyncio.Task[None], timeout: float = 5.0) -> None:
+async def shutdown_uvicorn_server(server: _uvicorn.Server, task: asyncio.Task[None], timeout: float = 5.0) -> None:  # type: ignore
     """Shutdown a uvicorn server and await the serving task."""
     logger.debug("Requesting graceful shutdown of uvicorn server.")
     server.should_exit = True
@@ -136,7 +177,7 @@ async def noop_context() -> AsyncIterator[None]:
 
 
 async def run_uvicorn_asyncio(
-    uvicorn_server: uvicorn.Server,
+    uvicorn_server: _uvicorn.Server,  # type: ignore
     serve_context: AsyncContextManager[Any],
     timeout: float = 60.0,
     health_url: Optional[str] = None,
@@ -170,7 +211,7 @@ async def run_uvicorn_asyncio(
         # Check for health endpoint status if provided
         if health_url is not None:
             logger.info(f"Probing health endpoint {health_url}...")
-            async with aiohttp.ClientSession() as session:
+            async with cast(_aiohttp, _aiohttp).ClientSession() as session:  # type: ignore
                 while time.time() < deadline:
                     try:
                         async with session.get(health_url) as resp:
@@ -237,13 +278,13 @@ async def run_uvicorn_asyncio(
 
 
 def run_uvicorn_thread(
-    uvicorn_server: uvicorn.Server,
+    uvicorn_server: _uvicorn.Server,  # type: ignore
     serve_context: AsyncContextManager[Any],
     event_queue: queue.Queue[ChildEvent],
     stop_event: threading.Event,
     timeout: float = 60.0,
     health_url: Optional[str] = None,
-):
+) -> None:
     """
     Run a uvicorn server in a thread.
 
@@ -316,12 +357,12 @@ def run_uvicorn_thread(
 
 
 def run_uvicorn_subprocess(
-    uvicorn_server: uvicorn.Server,
+    uvicorn_server: _uvicorn.Server,  # type: ignore
     serve_context: AsyncContextManager[Any],
     event_queue: multiprocessing.Queue[ChildEvent],
     timeout: float = 60.0,
     health_url: Optional[str] = None,
-):
+) -> None:
     """Run a uvicorn server in a subprocess.
 
     Behavior:
@@ -405,7 +446,7 @@ def run_gunicorn(
     event_queue: multiprocessing.Queue[ChildEvent],
     timeout: float = 60.0,
     health_url: Optional[str] = None,
-):
+) -> None:
     """Run a gunicorn server in a subprocess.
 
     The master arbiter will reside in a non-daemon subprocess,
@@ -422,7 +463,7 @@ def run_gunicorn(
     """
     # Create the arbiter up-front so the watchdog can inspect it.
     try:
-        arbiter = Arbiter(gunicorn_app)
+        arbiter = cast(_Arbiter, _Arbiter)(gunicorn_app)  # type: ignore
     except Exception as exc:
         logger.exception("Failed to initialize Gunicorn Arbiter.")
         event_queue.put(
@@ -481,7 +522,7 @@ def run_gunicorn(
 
                 # Check if the server is healthy.
                 try:
-                    resp = requests.get(health_url, timeout=2.0)
+                    resp = cast(_requests, _requests).get(health_url, timeout=2.0)  # type: ignore
                     if resp.status_code == 200:
                         logger.debug(f"Server is healthy at {health_url} in {time.time() - start:.2f} seconds.")
                         # Check arbiter status again.
@@ -606,8 +647,8 @@ class PythonServerLauncher:
     """
 
     def __init__(
-        self, app: FastAPI, args: PythonServerLauncherArgs, serve_context: Optional[AsyncContextManager[Any]] = None
-    ):
+        self, app: _FastAPI, args: PythonServerLauncherArgs, serve_context: Optional[AsyncContextManager[Any]] = None  # type: ignore
+    ) -> None:
         """Initialize the launcher with the FastAPI app, configuration, and optional serve context."""
         self.app = app
         self.args = args
@@ -624,7 +665,7 @@ class PythonServerLauncher:
         self._ensure_access_host()
 
         # uvicorn (in-proc asyncio)
-        self._uvicorn_server: Optional[uvicorn.Server] = None
+        self._uvicorn_server: Optional[_uvicorn.Server] = None  # type: ignore
         self._uvicorn_task: Optional[asyncio.Task[None]] = None  # returned by run_uvicorn_asyncio()
 
         # uvicorn (thread)
@@ -640,7 +681,7 @@ class PythonServerLauncher:
         # is_running flag
         self._is_running: bool = False
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         """Control pickling to prevent server state from being sent to subprocesses."""
         return {
             "app": self.app,
@@ -651,7 +692,7 @@ class PythonServerLauncher:
             "_access_host": self._access_host,
         }
 
-    def __setstate__(self, state: Dict[str, Any]):
+    def __setstate__(self, state: Dict[str, Any]) -> None:
         self.app = state["app"]
         self.args = cast(PythonServerLauncherArgs, state["args"])
         self.serve_context = state["serve_context"]
@@ -759,7 +800,7 @@ class PythonServerLauncher:
         return self._is_running
 
     @staticmethod
-    def _normalize_app_ref(app: FastAPI) -> str:
+    def _normalize_app_ref(app: _FastAPI) -> str:  # type: ignore
         module = getattr(app, "__module__", None)
         if module and module != "__main__":
             return f"{module}:app"
@@ -791,8 +832,8 @@ class PythonServerLauncher:
                 self._access_host = self.args.access_host
         return self._access_host  # type: ignore
 
-    def _create_uvicorn_server(self) -> uvicorn.Server:
-        config = uvicorn.Config(
+    def _create_uvicorn_server(self) -> _uvicorn.Server:  # type: ignore
+        config = cast(_uvicorn, _uvicorn).Config(  # type: ignore
             app=self.app,
             host=self._ensure_host(),
             port=self._ensure_port(),
@@ -801,7 +842,7 @@ class PythonServerLauncher:
             loop="asyncio",
             timeout_keep_alive=self.args.timeout_keep_alive,
         )
-        return uvicorn.Server(config)
+        return cast(_uvicorn, _uvicorn).Server(config)  # type: ignore
 
     def _ctx(self) -> AsyncContextManager[Any]:
         # Use the provided serve_context if any; otherwise a no-op async CM
@@ -925,6 +966,7 @@ class PythonServerLauncher:
         self._mp_event_queue = ctx.Queue()
 
         # Gunicorn path when n_workers > 1
+        # Gunicorn path when n_workers > 1
         if self.args.n_workers > 1:
             logger.info(f"Starting Gunicorn server...")
             options = {
@@ -946,7 +988,7 @@ class PythonServerLauncher:
 
             self._gunicorn_app = GunicornApp(self.app, options)
 
-            self._proc = ctx.Process(
+            self._proc = cast(BaseContext, ctx).Process(
                 target=run_gunicorn,
                 kwargs={
                     "gunicorn_app": self._gunicorn_app,
@@ -964,7 +1006,7 @@ class PythonServerLauncher:
             logger.info("Starting uvicorn subprocess server...")
             self._uvicorn_server = self._create_uvicorn_server()
 
-            self._proc = ctx.Process(
+            self._proc = cast(BaseContext, ctx).Process(
                 target=run_uvicorn_subprocess,
                 kwargs={
                     "uvicorn_server": self._uvicorn_server,
