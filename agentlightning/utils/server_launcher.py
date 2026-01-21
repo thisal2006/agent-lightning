@@ -1,23 +1,32 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from __future__ import annotations
-
+from typing import Any
 import asyncio
-import inspect
 import logging
 import multiprocessing
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, Optional
+import inspect
+
+
+IS_WINDOWS = sys.platform.startswith("win")
+
+logger = logging.getLogger(__name__)
 import os
 import queue
 import signal
 import socket
-import threading
-import time
 import traceback
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
 from typing import TYPE_CHECKING, Any, AsyncContextManager, AsyncIterator, Dict, Literal, Optional, cast
+
 
 import platform
 
